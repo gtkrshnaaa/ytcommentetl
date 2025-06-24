@@ -104,7 +104,7 @@ mlr --csv \
 
 ---
 
-### 🛠 5.3 Load – Masukkan ke MariaDB
+### 5.3 Load – Masukkan ke MariaDB
 
 1. Masuk MariaDB dan buat tabel:
 
