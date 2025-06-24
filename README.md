@@ -93,14 +93,18 @@ awk '
 
 ```bash
 mlr --csv \
-  put  '$user = tolower(sub($user, "^ +| +$", ""));
-        $comment = sub($comment, "^ +| +$", "");
-        $word_cnt = length(split($comment, " "));
-       ' \
-  filter 'length($comment) > 10' \
-  sort -f user \
+  put '$user = tolower($user)' \
+  then filter '$comment =~ "[A-Za-z]"' \
+  then sort -f user \
   comments_raw.csv > comments.csv
 ```
+
+Penjelasan:
+
+* `tolower($user)` → jadi huruf kecil semua
+* `filter` → hanya komentar yang ada huruf (abaikan emoji-only)
+* `sort` → biar rapi urut user
+
 
 ---
 
@@ -237,6 +241,7 @@ IGNORE 1 ROWS
 | Visualize | CSV di Google Colab    | Statistik, filtering, distribusi komentar |
 
 ---
+
 
 
 
