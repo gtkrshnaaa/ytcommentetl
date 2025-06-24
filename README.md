@@ -93,14 +93,24 @@ awk '
 
 ```bash
 mlr --csv \
-  put  '$user = tolower(trim($user));
-        $comment = trim($comment);
+  put  '$user = tolower(sub($user, "^ +| +$", ""));
+        $comment = sub($comment, "^ +| +$", "");
         $word_cnt = length(split($comment, " "));
        ' \
   filter 'length($comment) > 10' \
   sort -f user \
   comments_raw.csv > comments.csv
 ```
+
+---
+
+### Penjelasan:
+
+* `sub($user, "^ +| +$", "")`: menghapus spasi di awal dan akhir string (fungsi ini bisa ganti `trim()`).
+* `tolower(...)`: tetap valid, buat lowercase username.
+* `split($comment, " ")`: hitung jumlah kata di komentar.
+* `filter`: buang komentar pendek banget.
+* `sort -f user`: urutkan berdasarkan username (abaikan kapital).
 
 ---
 
@@ -227,4 +237,7 @@ IGNORE 1 ROWS
 | Visualize | CSV di Google Colab    | Statistik, filtering, distribusi komentar |
 
 ---
+
+
+
 
