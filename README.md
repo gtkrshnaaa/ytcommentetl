@@ -2,31 +2,25 @@
 
 ## Tujuan
 
-Melakukan proses **ETL (Extract, Transform, Load)** terhadap komentar YouTube yang awalnya berbentuk teks bebas, mengubahnya menjadi CSV terstruktur, lalu memuatnya ke dalam MariaDB—seluruhnya lewat CLI di Ubuntu.
+Melakukan proses **ETL (Extract, Transform, Load)** terhadap komentar YouTube yang awalnya berbentuk teks bebas, mengubahnya menjadi CSV terstruktur, lalu memuatnya ke dalam MariaDB.
+Seluruh proses dilakukan lewat **Command Line Interface (CLI)** di Ubuntu, dan dilengkapi dengan **visualisasi hasil** menggunakan Google Colab.
 
 ---
 
 ## Instalasi Tools
-1. downloader komentar
+
 ```bash
+# 1. downloader komentar
 pip install youtube-comment-downloader
-```
 
-2. awk bawaan; pastikan tersedia
-```bash
+# 2. pastikan awk tersedia
 awk --version
-```
 
-3. miller untuk transform lanjut
-```bash
+# 3. install miller
 sudo apt update
-```
-```bash
 sudo apt install miller
-```
 
-4. mariaDB
-```bash
+# 4. install MariaDB
 sudo apt install mariadb-server
 ```
 
@@ -40,6 +34,7 @@ sudo apt install mariadb-server
 | awk                        | Transform | Parsing awal teks mentah ke CSV                   |
 | miller                     | Transform | Pembersihan, validasi, penambahan kolom, konversi |
 | MariaDB                    | Load      | Menyimpan hasil akhir ke database                 |
+| Google Colab               | Visualize | Membaca dan menganalisis CSV di cloud environment |
 
 ---
 
@@ -51,7 +46,7 @@ sudo apt install mariadb-server
 youtube-comment-downloader --url "https://www.youtube.com/watch?v=VIDEO_ID" --output comments.txt
 ```
 
-Contoh `comments.txt`
+Contoh isi `comments.txt`:
 
 ```
 [0:00] user1: This video is amazing!
@@ -59,7 +54,9 @@ Contoh `comments.txt`
 [0:06] user3: I learned a lot.
 ```
 
-### 2. Transform
+---
+
+### 2. Transform – parsing dan pembersihan
 
 #### 2.1 Parsing awal dengan awk
 
@@ -74,8 +71,6 @@ awk 'BEGIN { FS="[][:]" ; OFS=","; print "timestamp,user,comment" } {
 
 #### 2.2 Pembersihan dan enrich dengan miller
 
-Contoh pipeline `miller` yang lebih bermakna:
-
 ```bash
 mlr --csv \
     put  '$user      = tolower(trim($user));
@@ -87,35 +82,17 @@ mlr --csv \
     comments_raw.csv > comments.csv
 ```
 
-Penjelasan singkat:
-
-| Operasi                | Fungsi                                |
-| ---------------------- | ------------------------------------- |
-| `tolower(trim($user))` | user ke huruf kecil, hapus spasi tepi |
-| `trim($comment)`       | hapus spasi tepi komentar             |
-| `word_cnt`             | kolom baru, hitung jumlah kata        |
-| `filter length>10`     | buang komentar spam/pendek            |
-| `sort -f user`         | urutkan berdasar kolom user           |
-
-Hasil cuplikan `comments.csv`
-
-```csv
-timestamp,user,comment,word_cnt
-0:00,user1,this video is amazing!,4
-0:03,user2,thanks for the explanation.,4
-0:06,user3,i learned a lot.,4
-```
-
-> Jika diperlukan konversi format (misal ke JSON) cukup:
-> `mlr --icsv --ojson cat comments.csv > comments.json`
+---
 
 ### 3. Load – masukkan ke MariaDB
 
-1. Masuk MariaDB dan buat skema
+1. Masuk MariaDB:
 
 ```bash
 sudo mysql
 ```
+
+2. Buat database dan tabel:
 
 ```sql
 CREATE DATABASE etl_example;
@@ -129,7 +106,7 @@ CREATE TABLE comments (
 );
 ```
 
-2. Muat file CSV
+3. Load CSV:
 
 ```bash
 sudo mysql --local-infile=1 -e "
@@ -142,7 +119,7 @@ IGNORE 1 ROWS
 " etl_example
 ```
 
-3. Verifikasi
+4. Verifikasi isi tabel:
 
 ```bash
 sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
@@ -150,23 +127,23 @@ sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
 
 ---
 
-## Ringkasan Pipeline
+## Ringkasan CLI Pipeline
 
 ```bash
 # Extract
 youtube-comment-downloader --url "YOUTUBE_URL" --output comments.txt
 
-# Transform: awk ➝ miller
+# Transform
 awk 'BEGIN {FS="[][:]"; OFS=","; print "timestamp,user,comment"}{
-      time=$2; user=$3; comment=substr($0,index($0,$4));
-      print time,user,comment
-     }' comments.txt \
-| mlr --csv put  '$user=tolower(trim($user));
-                  $comment=trim($comment);
-                  $word_cnt=length(split($comment," "));
-                 ' \
-       filter 'length($comment) > 10' \
-       sort -f user \
+    time=$2; user=$3; comment=substr($0,index($0,$4));
+    print time,user,comment
+}' comments.txt \
+| mlr --csv put '$user=tolower(trim($user));
+                 $comment=trim($comment);
+                 $word_cnt=length(split($comment," "));
+                ' \
+      filter 'length($comment) > 10' \
+      sort -f user \
 > comments.csv
 
 # Load
@@ -182,13 +159,52 @@ IGNORE 1 ROWS
 
 ---
 
+## Visualisasi CSV dengan Google Colab
+
+**Langkah-langkah visualisasi data hasil transformasi:**
+
+1. Upload `comments.csv` ke Google Drive.
+2. Buka Google Colab: [https://colab.research.google.com](https://colab.research.google.com)
+3. Jalankan kode berikut:
+
+```python
+# Mount Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+4. Baca CSV dan tampilkan analisis dasar:
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Ganti path sesuai lokasi file di Google Drive
+df = pd.read_csv('/content/drive/MyDrive/comments.csv')
+
+# Tampilkan beberapa baris
+print(df.head())
+
+# Statistik jumlah kata per komentar
+plt.figure(figsize=(8,4))
+df['word_cnt'].hist(bins=10)
+plt.title('Distribusi Jumlah Kata per Komentar')
+plt.xlabel('Jumlah Kata')
+plt.ylabel('Jumlah Komentar')
+plt.grid(True)
+plt.show()
+```
+
+---
+
 ## Hasil Akhir
 
-| Tahap     | Input           | Output                               |
-| --------- | --------------- | ------------------------------------ |
-| Extract   | Halaman YouTube | `comments.txt` (unstructured)        |
-| Transform | `comments.txt`  | `comments.csv` (terstruktur, bersih) |
-| Load      | `comments.csv`  | Tabel `comments` di MariaDB          |
+| Tahap     | Input           | Output                             |
+| --------- | --------------- | ---------------------------------- |
+| Extract   | Halaman YouTube | File `comments.txt` (unstructured) |
+| Transform | comments.txt    | File `comments.csv` (structured)   |
+| Load      | comments.csv    | Tabel `comments` di MariaDB        |
+| Visualize | comments.csv    | Histogram & statistik via Colab    |
 
 ---
 
