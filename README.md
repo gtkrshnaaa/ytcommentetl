@@ -108,15 +108,6 @@ Penjelasan:
 
 ---
 
-### Penjelasan:
-
-* `sub($user, "^ +| +$", "")`: menghapus spasi di awal dan akhir string (fungsi ini bisa ganti `trim()`).
-* `tolower(...)`: tetap valid, buat lowercase username.
-* `split($comment, " ")`: hitung jumlah kata di komentar.
-* `filter`: buang komentar pendek banget.
-* `sort -f user`: urutkan berdasarkan username (abaikan kapital).
-
----
 
 ### 5.3 Load – Masukkan ke MariaDB
 
