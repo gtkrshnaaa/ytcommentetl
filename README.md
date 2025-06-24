@@ -109,7 +109,7 @@ CREATE TABLE comments (
 #### Load CSV ke database:
 
 ```bash
-mysql -u root -p --local-infile=1 -e "
+sudo mysql --local-infile=1 -e "
 LOAD DATA LOCAL INFILE 'comments.csv'
 INTO TABLE comments
 FIELDS TERMINATED BY ','
@@ -122,7 +122,7 @@ IGNORE 1 ROWS
 #### Verifikasi:
 
 ```bash
-mysql -u root -p -e "SELECT * FROM etl_example.comments LIMIT 5;"
+sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
 ```
 
 ---
@@ -140,7 +140,7 @@ awk 'BEGIN { FS="[][:]" ; OFS=","; print "timestamp,user,comment" } {
 }' comments.txt > comments.csv
 
 # [L] Load
-mysql -u root -p --local-infile=1 -e "
+sudo mysql --local-infile=1 -e "
 LOAD DATA LOCAL INFILE 'comments.csv'
 INTO TABLE comments
 FIELDS TERMINATED BY ','
