@@ -1,92 +1,121 @@
-# Dokumentasi Resmi: ETL Komentar YouTube (Unstructured ➝ CSV ➝ MariaDB)
+# Dokumentasi Resmi: ETL Komentar YouTube
 
-## Tujuan
-
-Melakukan proses **ETL (Extract, Transform, Load)** terhadap komentar YouTube yang awalnya berbentuk teks bebas, mengubahnya menjadi CSV terstruktur, lalu memuatnya ke dalam MariaDB.
-Seluruh proses dilakukan lewat **Command Line Interface (CLI)** di Ubuntu, dan dilengkapi dengan **visualisasi hasil** menggunakan Google Colab.
+**(Unstructured ➝ NDJSON ➝ CSV ➝ MariaDB ➝ Visualisasi)**
 
 ---
 
-## Instalasi Tools
+## 1. Tujuan
+
+Dokumen ini menjelaskan proses lengkap **ETL (Extract, Transform, Load)** pada komentar publik YouTube.
+Komentar YouTube secara alami bersifat **unstructured** — bebas format, tanpa skema, dan sulit diolah secara langsung.
+Melalui pipeline ini, komentar tersebut:
+
+* **Diekstrak** menjadi **NDJSON** (semi-structured)
+* **Ditranformasi** ke dalam **CSV** (structured)
+* **Dimasukkan** ke **database MariaDB**
+* **Divisualisasikan** di Google Colab
+
+---
+
+## 2. Alur Transformasi Data
+
+```text
+[YouTube Comments]
+     (unstructured)
+          ↓ Extract
+  [NDJSON file: comments.txt]
+     (semi-structured)
+          ↓ Transform
+     [CSV file: comments.csv]
+       (structured)
+          ↓ Load
+   [Tabel: MariaDB - comments]
+          ↓ Visualisasi
+     [Grafik via Google Colab]
+```
+
+---
+
+## 3. Tools yang Digunakan
+
+| Tool                       | Peran ETL | Fungsi                                             |
+| -------------------------- | --------- | -------------------------------------------------- |
+| youtube-comment-downloader | Extract   | Ambil komentar YouTube, output NDJSON per baris    |
+| miller (`mlr`)             | Transform | Parsing JSON, bersihkan kolom, hitung metrik, dsb. |
+| MariaDB                    | Load      | Menyimpan hasil akhir dalam format relasional      |
+| Google Colab               | Visualize | Visualisasi data berbasis file CSV                 |
+
+---
+
+## 4. Instalasi di Ubuntu
 
 ```bash
-# 1. downloader komentar
+# 1. Extractor
 pip install youtube-comment-downloader
 
-# 2. pastikan awk tersedia
-awk --version
-
-# 3. install miller
+# 2. Transform tools
 sudo apt update
 sudo apt install miller
 
-# 4. install MariaDB
+# 3. Database
 sudo apt install mariadb-server
 ```
 
 ---
 
-## Tools yang Digunakan
+## 5. Step-by-Step ETL
 
-| Tool                       | Peran ETL | Ringkasan Fungsi                                  |
-| -------------------------- | --------- | ------------------------------------------------- |
-| youtube-comment-downloader | Extract   | Menyimpan komentar YouTube ke file teks           |
-| awk                        | Transform | Parsing awal teks mentah ke CSV                   |
-| miller                     | Transform | Pembersihan, validasi, penambahan kolom, konversi |
-| MariaDB                    | Load      | Menyimpan hasil akhir ke database                 |
-| Google Colab               | Visualize | Membaca dan menganalisis CSV di cloud environment |
-
----
-
-## Proses ETL
-
-### 1. Extract – ambil komentar
+### 🔹 5.1 Extract – Ambil Komentar dari YouTube
 
 ```bash
 youtube-comment-downloader --url "https://www.youtube.com/watch?v=VIDEO_ID" --output comments.txt
 ```
 
-Contoh isi `comments.txt`:
+File `comments.txt` berisi data dalam format NDJSON (newline-delimited JSON).
+Contoh:
 
+```json
+{"cid":"xxx","text":"Great video!","author":"@user1","time":"1 hari yang lalu",...}
+{"cid":"yyy","text":"Insane quality!","author":"@user2","time":"2 hari yang lalu",...}
 ```
-[0:00] user1: This video is amazing!
-[0:03] user2: Thanks for the explanation.
-[0:06] user3: I learned a lot.
-```
+
+> Pada tahap ini, komentar YouTube yang **unstructured** telah dikemas menjadi **semi-structured JSON**.
 
 ---
 
-### 2. Transform – parsing dan pembersihan
+### 🔹 5.2 Transform – JSON ➝ CSV
 
-#### 2.1 Parsing awal dengan awk
+#### a. Ubah NDJSON ke CSV:
 
 ```bash
-awk 'BEGIN { FS="[][:]" ; OFS=","; print "timestamp,user,comment" } {
-    time=$2;
-    user=$3;
-    comment=substr($0, index($0,$4));
-    print time, user, comment
-}' comments.txt > comments_raw.csv
+mlr --ijson --ocsv cat comments.txt > comments_raw.csv
 ```
 
-#### 2.2 Pembersihan dan enrich dengan miller
+#### b. Bersihkan dan Enrich:
 
 ```bash
 mlr --csv \
-    put  '$user      = tolower(trim($user));
-          $comment   = trim($comment);
-          $word_cnt  = length(split($comment," "));
-         ' \
-    filter 'length($comment) > 10' \
-    sort   -f user \
-    comments_raw.csv > comments.csv
+  put '$user = tolower($author);
+       $comment = $text;
+       $word_cnt = length(split($text," "));
+      ' \
+  filter 'length($text) > 10' \
+  cut -f time,user,comment,word_cnt \
+  sort -f user \
+  comments_raw.csv > comments.csv
 ```
+
+Penjelasan:
+
+* Kolom `author` diganti menjadi `user` (huruf kecil)
+* Hitung jumlah kata (`word_cnt`)
+* Filter komentar terlalu pendek
 
 ---
 
-### 3. Load – masukkan ke MariaDB
+### 🔹 5.3 Load – Masukkan ke MariaDB
 
-1. Masuk MariaDB:
+1. Masuk ke MariaDB:
 
 ```bash
 sudo mysql
@@ -99,14 +128,14 @@ CREATE DATABASE etl_example;
 USE etl_example;
 
 CREATE TABLE comments (
-    timestamp VARCHAR(10),
-    user      VARCHAR(100),
-    comment   TEXT,
-    word_cnt  INT
+    time VARCHAR(50),
+    user VARCHAR(100),
+    comment TEXT,
+    word_cnt INT
 );
 ```
 
-3. Load CSV:
+3. Muat CSV:
 
 ```bash
 sudo mysql --local-infile=1 -e "
@@ -115,11 +144,11 @@ INTO TABLE comments
 FIELDS TERMINATED BY ','
 LINES TERMINATED BY '\n'
 IGNORE 1 ROWS
-(timestamp, user, comment, word_cnt);
+(time, user, comment, word_cnt);
 " etl_example
 ```
 
-4. Verifikasi isi tabel:
+4. Verifikasi:
 
 ```bash
 sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
@@ -127,24 +156,63 @@ sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
 
 ---
 
-## Ringkasan CLI Pipeline
+## 6. Visualisasi Data di Google Colab
+
+1. Upload `comments.csv` ke Google Drive
+2. Buka [Google Colab](https://colab.research.google.com)
+3. Jalankan:
+
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+4. Analisis dan grafik:
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Ganti path sesuai lokasi file
+df = pd.read_csv('/content/drive/MyDrive/comments.csv')
+
+# Statistik awal
+print(df.head())
+
+# Komentar terpanjang
+print("\nKomentar terpanjang:")
+print(df.loc[df['word_cnt'].idxmax()])
+
+# Distribusi jumlah kata
+plt.figure(figsize=(8,4))
+df['word_cnt'].hist(bins=10, color='teal')
+plt.title('Distribusi Panjang Komentar')
+plt.xlabel('Jumlah Kata')
+plt.ylabel('Jumlah Komentar')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## 7. Ringkasan CLI Pipeline
 
 ```bash
 # Extract
 youtube-comment-downloader --url "YOUTUBE_URL" --output comments.txt
 
 # Transform
-awk 'BEGIN {FS="[][:]"; OFS=","; print "timestamp,user,comment"}{
-    time=$2; user=$3; comment=substr($0,index($0,$4));
-    print time,user,comment
-}' comments.txt \
-| mlr --csv put '$user=tolower(trim($user));
-                 $comment=trim($comment);
-                 $word_cnt=length(split($comment," "));
-                ' \
-      filter 'length($comment) > 10' \
-      sort -f user \
-> comments.csv
+mlr --ijson --ocsv cat comments.txt > comments_raw.csv
+
+mlr --csv put '$user=tolower($author);
+                $comment=$text;
+                $word_cnt=length(split($text," "));
+               ' \
+    filter 'length($text) > 10' \
+    cut -f time,user,comment,word_cnt \
+    sort -f user \
+    comments_raw.csv > comments.csv
 
 # Load
 sudo mysql --local-infile=1 -e "
@@ -153,58 +221,20 @@ INTO TABLE comments
 FIELDS TERMINATED BY ','
 LINES TERMINATED BY '\n'
 IGNORE 1 ROWS
-(timestamp, user, comment, word_cnt);
+(time, user, comment, word_cnt);
 " etl_example
 ```
 
 ---
 
-## Visualisasi CSV dengan Google Colab
+## 8. Kesimpulan
 
-**Langkah-langkah visualisasi data hasil transformasi:**
-
-1. Upload `comments.csv` ke Google Drive.
-2. Buka Google Colab: [https://colab.research.google.com](https://colab.research.google.com)
-3. Jalankan kode berikut:
-
-```python
-# Mount Google Drive
-from google.colab import drive
-drive.mount('/content/drive')
-```
-
-4. Baca CSV dan tampilkan analisis dasar:
-
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Ganti path sesuai lokasi file di Google Drive
-df = pd.read_csv('/content/drive/MyDrive/comments.csv')
-
-# Tampilkan beberapa baris
-print(df.head())
-
-# Statistik jumlah kata per komentar
-plt.figure(figsize=(8,4))
-df['word_cnt'].hist(bins=10)
-plt.title('Distribusi Jumlah Kata per Komentar')
-plt.xlabel('Jumlah Kata')
-plt.ylabel('Jumlah Komentar')
-plt.grid(True)
-plt.show()
-```
-
----
-
-## Hasil Akhir
-
-| Tahap     | Input           | Output                             |
-| --------- | --------------- | ---------------------------------- |
-| Extract   | Halaman YouTube | File `comments.txt` (unstructured) |
-| Transform | comments.txt    | File `comments.csv` (structured)   |
-| Load      | comments.csv    | Tabel `comments` di MariaDB        |
-| Visualize | comments.csv    | Histogram & statistik via Colab    |
+| Tahap     | Format                | Keterangan                                     |
+| --------- | --------------------- | ---------------------------------------------- |
+| Extract   | Unstructured ➝ NDJSON | Komentar mentah dibungkus jadi JSON per baris  |
+| Transform | NDJSON ➝ CSV          | Parsing, filter, enrich (jumlah kata)          |
+| Load      | CSV ➝ MariaDB         | Data dimasukkan ke tabel relasional            |
+| Visualize | CSV ➝ Grafik          | Analisis dan statistik visual via Google Colab |
 
 ---
 
