@@ -1,141 +1,130 @@
-# Dokumentasi Resmi: ETL Komentar YouTube
-
-**(Unstructured ➝ NDJSON ➝ CSV ➝ MariaDB ➝ Visualisasi)**
+# Dokumentasi Resmi: ETL Komentar YouTube (Unstructured ➝ NDJSON ➝ CSV ➝ MariaDB ➝ Visualisasi)
 
 ---
 
 ## 1. Tujuan
 
-Dokumen ini menjelaskan proses lengkap **ETL (Extract, Transform, Load)** pada komentar publik YouTube.
-Komentar YouTube secara alami bersifat **unstructured** — bebas format, tanpa skema, dan sulit diolah secara langsung.
-Melalui pipeline ini, komentar tersebut:
+Dokumen ini menjelaskan proses lengkap **ETL (Extract, Transform, Load)** untuk komentar YouTube. Komentar publik YouTube adalah **unstructured data**—tidak memiliki format baku dan tidak bisa langsung dianalisis secara tabular.
 
-* **Diekstrak** menjadi **NDJSON** (semi-structured)
-* **Ditranformasi** ke dalam **CSV** (structured)
-* **Dimasukkan** ke **database MariaDB**
-* **Divisualisasikan** di Google Colab
+Melalui alat CLI, data tersebut:
+
+* **Diekstrak** ke bentuk **NDJSON** (JSON per baris)
+* **Ditranformasi** menggunakan **`awk`** dan **`miller`**
+* **Dimasukkan** ke database MariaDB
+* **Divisualisasikan** lewat Google Colab
 
 ---
 
-## 2. Alur Transformasi Data
+## 2. Karakteristik Data
 
-```text
-[YouTube Comments]
-     (unstructured)
-          ↓ Extract
-  [NDJSON file: comments.txt]
-     (semi-structured)
-          ↓ Transform
-     [CSV file: comments.csv]
-       (structured)
-          ↓ Load
-   [Tabel: MariaDB - comments]
-          ↓ Visualisasi
-     [Grafik via Google Colab]
-```
+| Tahap             | Format          | Penjelasan                                                              |
+| ----------------- | --------------- | ----------------------------------------------------------------------- |
+| Sumber asli       | Unstructured    | Komentar publik YouTube (bebas, tidak memiliki skema tetap)             |
+| Setelah extract   | Semi-structured | JSON per baris (NDJSON), memiliki struktur field dasar                  |
+| Setelah transform | Structured      | CSV dengan kolom tetap: waktu, user, komentar, jumlah kata (word count) |
 
 ---
 
 ## 3. Tools yang Digunakan
 
-| Tool                       | Peran ETL | Fungsi                                             |
-| -------------------------- | --------- | -------------------------------------------------- |
-| youtube-comment-downloader | Extract   | Ambil komentar YouTube, output NDJSON per baris    |
-| miller (`mlr`)             | Transform | Parsing JSON, bersihkan kolom, hitung metrik, dsb. |
-| MariaDB                    | Load      | Menyimpan hasil akhir dalam format relasional      |
-| Google Colab               | Visualize | Visualisasi data berbasis file CSV                 |
+| Tool                         | Fungsi      | Peran ETL                          |
+| ---------------------------- | ----------- | ---------------------------------- |
+| `youtube-comment-downloader` | Downloader  | Extract dari YouTube (NDJSON)      |
+| `awk`                        | Text parser | Parsing awal NDJSON ke CSV kasar   |
+| `miller (mlr)`               | Transformer | Bersihkan, ubah format, enrich CSV |
+| `MariaDB`                    | Database    | Load data structured ke SQL        |
+| `Google Colab`               | Visualisasi | Analisis dan grafik berbasis CSV   |
 
 ---
 
-## 4. Instalasi di Ubuntu
+## 4. Instalasi (Ubuntu)
 
 ```bash
-# 1. Extractor
 pip install youtube-comment-downloader
 
-# 2. Transform tools
 sudo apt update
-sudo apt install miller
-
-# 3. Database
-sudo apt install mariadb-server
+sudo apt install awk miller mariadb-server
 ```
 
 ---
 
-## 5. Step-by-Step ETL
+## 5. Proses ETL
 
-### 🔹 5.1 Extract – Ambil Komentar dari YouTube
+### 5.1 Extract – Ambil Komentar YouTube
 
 ```bash
-youtube-comment-downloader --url "https://www.youtube.com/watch?v=VIDEO_ID" --output comments.txt
+youtube-comment-downloader --url "https://www.youtube.com/watch?v=VIDEO_ID" --output comments.json
 ```
 
-File `comments.txt` berisi data dalam format NDJSON (newline-delimited JSON).
+Output berupa **file `.json`** berisi **NDJSON** (1 JSON per baris).
+
 Contoh:
+```bash
+head -n 20 comments.json
+```
 
 ```json
-{"cid":"xxx","text":"Great video!","author":"@user1","time":"1 hari yang lalu",...}
-{"cid":"yyy","text":"Insane quality!","author":"@user2","time":"2 hari yang lalu",...}
+{"text": "Great video!", "author": "@user1", "time": "1 hari yang lalu", ...}
+{"text": "I love this part!", "author": "@user2", "time": "2 hari yang lalu", ...}
 ```
-
-> Pada tahap ini, komentar YouTube yang **unstructured** telah dikemas menjadi **semi-structured JSON**.
 
 ---
 
-### 🔹 5.2 Transform – JSON ➝ CSV
+### 5.2 Transform – JSON ➝ CSV (awk ➝ miller)
 
-#### a. Ubah NDJSON ke CSV:
+#### a. Ambil kolom penting pakai `awk`
 
 ```bash
-mlr --ijson --ocsv cat comments.txt > comments_raw.csv
+awk '
+  BEGIN { print "time,user,comment" }
+  {
+    match($0, /"time": ?"([^"]+)"/, time)
+    match($0, /"author": ?"([^"]+)"/, user)
+    match($0, /"text": ?"([^"]+)"/, comment)
+    gsub(/"/, "", comment[1])
+    print time[1] "," user[1] "," comment[1]
+  }
+' comments.json > comments_raw.csv
 ```
 
-#### b. Bersihkan dan Enrich:
+> Ini mengubah NDJSON ke CSV kasar dengan 3 kolom: `time`, `user`, `comment`.
+
+#### b. Bersihkan dan tambah word count dengan `miller`
 
 ```bash
 mlr --csv \
-  put '$user = tolower($author);
-       $comment = $text;
-       $word_cnt = length(split($text," "));
-      ' \
-  filter 'length($text) > 10' \
-  cut -f time,user,comment,word_cnt \
+  put  '$user = tolower(trim($user));
+        $comment = trim($comment);
+        $word_cnt = length(split($comment, " "));
+       ' \
+  filter 'length($comment) > 10' \
   sort -f user \
   comments_raw.csv > comments.csv
 ```
 
-Penjelasan:
-
-* Kolom `author` diganti menjadi `user` (huruf kecil)
-* Hitung jumlah kata (`word_cnt`)
-* Filter komentar terlalu pendek
-
 ---
 
-### 🔹 5.3 Load – Masukkan ke MariaDB
+### 🛠 5.3 Load – Masukkan ke MariaDB
 
-1. Masuk ke MariaDB:
+1. Masuk MariaDB dan buat tabel:
 
 ```bash
 sudo mysql
 ```
-
-2. Buat database dan tabel:
 
 ```sql
 CREATE DATABASE etl_example;
 USE etl_example;
 
 CREATE TABLE comments (
-    time VARCHAR(50),
-    user VARCHAR(100),
-    comment TEXT,
-    word_cnt INT
+  time VARCHAR(50),
+  user VARCHAR(100),
+  comment TEXT,
+  word_cnt INT
 );
 ```
 
-3. Muat CSV:
+2. Load data ke database:
 
 ```bash
 sudo mysql --local-infile=1 -e "
@@ -148,32 +137,24 @@ IGNORE 1 ROWS
 " etl_example
 ```
 
-4. Verifikasi:
-
-```bash
-sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
-```
-
 ---
 
-## 6. Visualisasi Data di Google Colab
+## 6. Visualisasi di Google Colab
 
 1. Upload `comments.csv` ke Google Drive
-2. Buka [Google Colab](https://colab.research.google.com)
-3. Jalankan:
+2. Buka Google Colab → Jalankan:
 
 ```python
 from google.colab import drive
 drive.mount('/content/drive')
 ```
 
-4. Analisis dan grafik:
+3. Visualisasi:
 
 ```python
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Ganti path sesuai lokasi file
 df = pd.read_csv('/content/drive/MyDrive/comments.csv')
 
 # Statistik awal
@@ -183,9 +164,9 @@ print(df.head())
 print("\nKomentar terpanjang:")
 print(df.loc[df['word_cnt'].idxmax()])
 
-# Distribusi jumlah kata
+# Histogram jumlah kata
 plt.figure(figsize=(8,4))
-df['word_cnt'].hist(bins=10, color='teal')
+df['word_cnt'].hist(bins=10, color='steelblue')
 plt.title('Distribusi Panjang Komentar')
 plt.xlabel('Jumlah Kata')
 plt.ylabel('Jumlah Komentar')
@@ -196,23 +177,32 @@ plt.show()
 
 ---
 
-## 7. Ringkasan CLI Pipeline
+## 7. Ringkasan Perintah (Pipeline CLI)
 
 ```bash
 # Extract
-youtube-comment-downloader --url "YOUTUBE_URL" --output comments.txt
+youtube-comment-downloader --url "YOUTUBE_URL" --output comments.json
 
-# Transform
-mlr --ijson --ocsv cat comments.txt > comments_raw.csv
+# Transform (awk ➝ miller)
+awk '
+  BEGIN { print "time,user,comment" }
+  {
+    match($0, /"time": ?"([^"]+)"/, time)
+    match($0, /"author": ?"([^"]+)"/, user)
+    match($0, /"text": ?"([^"]+)"/, comment)
+    gsub(/"/, "", comment[1])
+    print time[1] "," user[1] "," comment[1]
+  }
+' comments.json > comments_raw.csv
 
-mlr --csv put '$user=tolower($author);
-                $comment=$text;
-                $word_cnt=length(split($text," "));
-               ' \
-    filter 'length($text) > 10' \
-    cut -f time,user,comment,word_cnt \
-    sort -f user \
-    comments_raw.csv > comments.csv
+mlr --csv \
+  put  '$user = tolower(trim($user));
+        $comment = trim($comment);
+        $word_cnt = length(split($comment, " "));
+       ' \
+  filter 'length($comment) > 10' \
+  sort -f user \
+  comments_raw.csv > comments.csv
 
 # Load
 sudo mysql --local-infile=1 -e "
@@ -229,12 +219,12 @@ IGNORE 1 ROWS
 
 ## 8. Kesimpulan
 
-| Tahap     | Format                | Keterangan                                     |
-| --------- | --------------------- | ---------------------------------------------- |
-| Extract   | Unstructured ➝ NDJSON | Komentar mentah dibungkus jadi JSON per baris  |
-| Transform | NDJSON ➝ CSV          | Parsing, filter, enrich (jumlah kata)          |
-| Load      | CSV ➝ MariaDB         | Data dimasukkan ke tabel relasional            |
-| Visualize | CSV ➝ Grafik          | Analisis dan statistik visual via Google Colab |
+| Tahap     | Format                 | Keterangan                                |
+| --------- | ---------------------- | ----------------------------------------- |
+| Extract   | NDJSON (per baris)     | Komentar YouTube dibungkus dalam JSON     |
+| Transform | CSV (via awk + miller) | Parsing manual + enrich kolom word count  |
+| Load      | SQL Table              | Data structured dimuat ke MariaDB         |
+| Visualize | CSV di Google Colab    | Statistik, filtering, distribusi komentar |
 
 ---
 
