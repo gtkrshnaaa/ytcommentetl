@@ -2,26 +2,22 @@
 
 ## Tujuan
 
-Melakukan proses **ETL (Extract, Transform, Load)** terhadap komentar YouTube yang awalnya berbentuk **unstructured text**, lalu mengubahnya ke dalam format CSV terstruktur dan memuatnya ke dalam database MariaDB.
-Seluruh proses dilakukan menggunakan alat baris perintah (CLI) di Ubuntu, tanpa GUI dan tanpa ketergantungan pada Snap.
+Melakukan proses **ETL (Extract, Transform, Load)** terhadap komentar YouTube yang awalnya berbentuk teks bebas, mengubahnya menjadi CSV terstruktur, lalu memuatnya ke dalam MariaDB—seluruhnya lewat CLI di Ubuntu.
 
 ---
 
 ## Instalasi Tools
-
-Lakukan instalasi berikut di terminal Ubuntu:
-
-1. Install youtube-comment-downloader
+1. downloader komentar
 ```bash
 pip install youtube-comment-downloader
 ```
 
-2. Pastikan awk tersedia (biasanya sudah default)
+2. awk bawaan; pastikan tersedia
 ```bash
 awk --version
 ```
 
-3. (Opsional) Install Miller untuk transformasi lanjutan
+3. miller untuk transform lanjut
 ```bash
 sudo apt update
 ```
@@ -29,7 +25,7 @@ sudo apt update
 sudo apt install miller
 ```
 
-4. Install MariaDB server
+4. mariaDB
 ```bash
 sudo apt install mariadb-server
 ```
@@ -38,28 +34,24 @@ sudo apt install mariadb-server
 
 ## Tools yang Digunakan
 
-| Tool                       | Peran dalam ETL      | Fungsi                             |
-| -------------------------- | -------------------- | ---------------------------------- |
-| youtube-comment-downloader | Extract              | Mengambil komentar dari YouTube    |
-| awk                        | Transform            | Parsing teks mentah ke CSV         |
-| miller                     | Transform (opsional) | Filter, validasi, normalisasi data |
-| MariaDB                    | Load                 | Menyimpan hasil akhir ke database  |
+| Tool                       | Peran ETL | Ringkasan Fungsi                                  |
+| -------------------------- | --------- | ------------------------------------------------- |
+| youtube-comment-downloader | Extract   | Menyimpan komentar YouTube ke file teks           |
+| awk                        | Transform | Parsing awal teks mentah ke CSV                   |
+| miller                     | Transform | Pembersihan, validasi, penambahan kolom, konversi |
+| MariaDB                    | Load      | Menyimpan hasil akhir ke database                 |
 
 ---
 
 ## Proses ETL
 
-### Extract – Ambil Komentar Unstructured
-
-**Tujuan**: Mengambil komentar dari video YouTube dan menyimpannya sebagai teks mentah (comments.txt).
-
-**Perintah**:
+### 1. Extract – ambil komentar
 
 ```bash
 youtube-comment-downloader --url "https://www.youtube.com/watch?v=VIDEO_ID" --output comments.txt
 ```
 
-**Contoh output `comments.txt`**:
+Contoh `comments.txt`
 
 ```
 [0:00] user1: This video is amazing!
@@ -67,13 +59,9 @@ youtube-comment-downloader --url "https://www.youtube.com/watch?v=VIDEO_ID" --ou
 [0:06] user3: I learned a lot.
 ```
 
----
+### 2. Transform
 
-### Transform – Ubah ke Format CSV
-
-**Tujuan**: Mengubah teks mentah menjadi data terstruktur dalam format CSV.
-
-**Parsing menggunakan awk**:
+#### 2.1 Parsing awal dengan awk
 
 ```bash
 awk 'BEGIN { FS="[][:]" ; OFS=","; print "timestamp,user,comment" } {
@@ -81,39 +69,53 @@ awk 'BEGIN { FS="[][:]" ; OFS=","; print "timestamp,user,comment" } {
     user=$3;
     comment=substr($0, index($0,$4));
     print time, user, comment
-}' comments.txt > comments.csv
+}' comments.txt > comments_raw.csv
 ```
 
-**Contoh output `comments.csv`**:
+#### 2.2 Pembersihan dan enrich dengan miller
 
-```csv
-timestamp,user,comment
-0:00,user1,This video is amazing!
-0:03,user2,Thanks for the explanation.
-0:06,user3,I learned a lot.
-```
-
-**Opsional (gunakan miller untuk normalisasi atau validasi):**
+Contoh pipeline `miller` yang lebih bermakna:
 
 ```bash
-mlr --csv put '$comment = tolower($comment)' comments.csv > comments_clean.csv
+mlr --csv \
+    put  '$user      = tolower(trim($user));
+          $comment   = trim($comment);
+          $word_cnt  = length(split($comment," "));
+         ' \
+    filter 'length($comment) > 10' \
+    sort   -f user \
+    comments_raw.csv > comments.csv
 ```
 
----
+Penjelasan singkat:
 
-### Load – Masukkan ke MariaDB
+| Operasi                | Fungsi                                |
+| ---------------------- | ------------------------------------- |
+| `tolower(trim($user))` | user ke huruf kecil, hapus spasi tepi |
+| `trim($comment)`       | hapus spasi tepi komentar             |
+| `word_cnt`             | kolom baru, hitung jumlah kata        |
+| `filter length>10`     | buang komentar spam/pendek            |
+| `sort -f user`         | urutkan berdasar kolom user           |
 
-**Tujuan**: Memasukkan file CSV ke dalam tabel database.
+Hasil cuplikan `comments.csv`
 
-**Buat database dan tabel**:
+```csv
+timestamp,user,comment,word_cnt
+0:00,user1,this video is amazing!,4
+0:03,user2,thanks for the explanation.,4
+0:06,user3,i learned a lot.,4
+```
 
-Masuk ke MariaDB:
+> Jika diperlukan konversi format (misal ke JSON) cukup:
+> `mlr --icsv --ojson cat comments.csv > comments.json`
+
+### 3. Load – masukkan ke MariaDB
+
+1. Masuk MariaDB dan buat skema
 
 ```bash
 sudo mysql
 ```
-
-Lalu jalankan:
 
 ```sql
 CREATE DATABASE etl_example;
@@ -121,12 +123,13 @@ USE etl_example;
 
 CREATE TABLE comments (
     timestamp VARCHAR(10),
-    user VARCHAR(100),
-    comment TEXT
+    user      VARCHAR(100),
+    comment   TEXT,
+    word_cnt  INT
 );
 ```
 
-**Load CSV ke database**:
+2. Muat file CSV
 
 ```bash
 sudo mysql --local-infile=1 -e "
@@ -135,11 +138,11 @@ INTO TABLE comments
 FIELDS TERMINATED BY ','
 LINES TERMINATED BY '\n'
 IGNORE 1 ROWS
-(timestamp, user, comment);
+(timestamp, user, comment, word_cnt);
 " etl_example
 ```
 
-**Verifikasi data**:
+3. Verifikasi
 
 ```bash
 sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
@@ -153,11 +156,18 @@ sudo mysql -e "SELECT * FROM etl_example.comments LIMIT 5;"
 # Extract
 youtube-comment-downloader --url "YOUTUBE_URL" --output comments.txt
 
-# Transform
-awk 'BEGIN { FS="[][:]" ; OFS=","; print "timestamp,user,comment" } {
-    time=$2; user=$3; comment=substr($0, index($0,$4));
-    print time, user, comment
-}' comments.txt > comments.csv
+# Transform: awk ➝ miller
+awk 'BEGIN {FS="[][:]"; OFS=","; print "timestamp,user,comment"}{
+      time=$2; user=$3; comment=substr($0,index($0,$4));
+      print time,user,comment
+     }' comments.txt \
+| mlr --csv put  '$user=tolower(trim($user));
+                  $comment=trim($comment);
+                  $word_cnt=length(split($comment," "));
+                 ' \
+       filter 'length($comment) > 10' \
+       sort -f user \
+> comments.csv
 
 # Load
 sudo mysql --local-infile=1 -e "
@@ -166,7 +176,7 @@ INTO TABLE comments
 FIELDS TERMINATED BY ','
 LINES TERMINATED BY '\n'
 IGNORE 1 ROWS
-(timestamp, user, comment);
+(timestamp, user, comment, word_cnt);
 " etl_example
 ```
 
@@ -174,11 +184,11 @@ IGNORE 1 ROWS
 
 ## Hasil Akhir
 
-| Tahap     | Input               | Output                             |
-| --------- | ------------------- | ---------------------------------- |
-| Extract   | YouTube page        | File `comments.txt` (unstructured) |
-| Transform | File `comments.txt` | File `comments.csv` (structured)   |
-| Load      | File `comments.csv` | Tabel `comments` di MariaDB        |
+| Tahap     | Input           | Output                               |
+| --------- | --------------- | ------------------------------------ |
+| Extract   | Halaman YouTube | `comments.txt` (unstructured)        |
+| Transform | `comments.txt`  | `comments.csv` (terstruktur, bersih) |
+| Load      | `comments.csv`  | Tabel `comments` di MariaDB          |
 
 ---
 
