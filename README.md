@@ -151,7 +151,10 @@ IGNORE 1 ROWS
 4. Verifikasi cepat:
 
 ```bash
-sudo mysql -e "SELECT COUNT(*) AS total, user FROM etl_ytcomments.comments GROUP BY user LIMIT 5;"
+sudo mysql -e "SELECT COUNT(*) AS total, user FROM etl_ytcomments.comments GROUP BY user LIMIT 10;"
+```
+```bash
+sudo mysql -e "SELECT time, user, comment FROM etl_ytcomments.comments LIMIT 10;"
 ```
 
 ---
